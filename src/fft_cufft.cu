@@ -31,9 +31,10 @@ void init_fft() {
 struct fft_detail {
   float *window;
   size_t resolution;
-  size_t interval;
+  float a;
+  float b;
   size_t width;
-  const uint8_t *reference;
+  const float *reference;
   size_t reference_batch_count;
   float diff;
   float *envelope;
@@ -49,7 +50,7 @@ __device__ cufftReal input_cb(
   fft_detail *detail = (fft_detail*)callerInfo;
   size_t index = offset % detail->resolution;
   size_t batch = detail->batch_offset + offset / detail->resolution;
-  int16_t element = ((int16_t*)src)[ index + batch * detail->interval ];
+  int16_t element = ((int16_t*)src)[ index + size_t( batch * batch * detail->a + batch * detail->b ) ];
   return ( cufftReal )( element/32767.f * detail->window[ index ] );
 }
 
@@ -83,9 +84,9 @@ __device__ void output_log_cb(
   if( index < detail->width ) {
     const float value = cuCabsf( element );
     atomicAdd( detail->envelope + batch, value );
-    const float log_value_ = 80.f * __log10f( value < 1.f ? 1.f : value );
-    const int log_value = log_value_ > 255.f ? int( 255 ) : int( log_value_ );
-    ( (uint8_t*)dataOut )[ index + detail->width * batch ] = log_value;
+    //const float log_value_ = 80.f * __log10f( value < 1.f ? 1.f : value );
+    //const int log_value = log_value_ > 255.f ? int( 255 ) : int( log_value_ );
+    ( (float*)dataOut )[ index + detail->width * batch ] = value;
   }
 }
 
@@ -103,16 +104,16 @@ __device__ void output_comp_cb(
     if( batch < detail->reference_batch_count ) {
       const float value = cuCabsf( element );
       atomicAdd( detail->envelope + batch, value );
-      const float log_value_ = 80.f * __log10f( value < 1.f ? 1.f : value );
-      const int log_value = log_value_ > 255.f ? int( 255 ) : int( log_value_ );
-      atomicAdd( &detail->diff, float( __sad( log_value, int( detail->reference[ index + detail->width * batch ] ), 0 ) ) );
+      //const float log_value_ = 80.f * __log10f( value < 1.f ? 1.f : value );
+      //const int log_value = log_value_ > 255.f ? int( 255 ) : int( log_value_ );
+      atomicAdd( &detail->diff, fabsf( value - detail->reference[ index + detail->width * batch ] ) );
     }
     else {
       const float value = cuCabsf( element );
       atomicAdd( detail->envelope + batch, value );
-      const float log_value_ = 80.f * __log10f( value < 1.f ? 1.f : value );
-      const float log_value = log_value_ > 255.f ? 255.f : float( log_value_ );
-      atomicAdd( &detail->diff, log_value );
+      //const float log_value_ = 80.f * __log10f( value < 1.f ? 1.f : value );
+      //const float log_value = log_value_ > 255.f ? 255.f : float( log_value_ );
+      atomicAdd( &detail->diff, value );
     }
   }
 }
@@ -154,51 +155,12 @@ window_list_t generate_window() {
   return std::move( result );
 }
 
-std::shared_ptr< float > fft( const window_list_t &window, const std::vector< int16_t > &data, size_t resolution, size_t interval, size_t width ) {
+std::pair< std::vector< float >, std::shared_ptr< float > > fftref( const window_list_t &window, const std::vector< int16_t > &data, size_t resolution, float a, float b, size_t width ) {
   const auto window_iter = window.find( resolution );
   if( window_iter == window.end() ) throw fft_initialization_failed( "invalid resolution" );
-  const size_t batch = ( data.size() - resolution )/interval + 1;
-  float *envelope;
-  checkCudaErrors(cudaMalloc( &envelope, sizeof(float)*batch), fft_allocation_failed );
-  std::shared_ptr< float > wrapped_envelope( envelope, &cudaFree );
-  checkCudaErrors( cudaMemset( envelope, 0, batch * sizeof(float) ), fft_initialization_failed );
-  fft_detail *detail;
-  checkCudaErrors(cudaMallocManaged( &detail, sizeof(fft_detail),cudaMemAttachGlobal), fft_allocation_failed );
-  std::shared_ptr< fft_detail > wrapped_detail( detail, &cudaFree );
-  detail->resolution = resolution;
-  detail->interval = interval;
-  detail->width = width;
-  detail->window = window_iter->second.get();
-  detail->envelope = envelope;
-  detail->batch_offset = 0u;
-  int16_t *input;
-  checkCudaErrors(cudaMalloc( &input, sizeof(int16_t)*interval*batch), fft_allocation_failed );
-  std::shared_ptr< int16_t > wrapped_input( input, &cudaFree );
-  checkCudaErrors(cudaMemcpy( input, data.data(), sizeof(int16_t)*data.size(), cudaMemcpyHostToDevice ), fft_data_transfar_failed );
-  checkCudaErrors(cudaMemset( input + sizeof(int16_t)*data.size(), 0, sizeof( int16_t )*( interval*batch - data.size() ) ), fft_data_transfar_failed );
-  float *output;
-  checkCudaErrors(cudaMalloc( &output, sizeof(float)*width*batch), fft_allocation_failed );
-  std::shared_ptr< float > wrapped_output( output, &cudaFree );
-  cufftHandle plan;
-  checkCuFFTErrors( cufftCreate( &plan ), fft_initialization_failed );
-  int signal_size = resolution;
-  size_t work_size;
-  checkCuFFTErrors( cufftMakePlanMany( plan, 1, &signal_size, 0, 0, 0, 0, 0, 0, CUFFT_R2C, batch, &work_size ), fft_initialization_failed );
-  cufftCallbackLoadR input_cb_ptr_h;
-  checkCudaErrors( cudaMemcpyFromSymbol( &input_cb_ptr_h, input_cb_ptr_d, sizeof( cufftCallbackLoadR ) ), fft_data_transfar_failed );
-  cufftCallbackStoreC output_cb_ptr_h;
-  checkCudaErrors( cudaMemcpyFromSymbol( &output_cb_ptr_h, output_cb_ptr_d, sizeof( cufftCallbackStoreC ) ), fft_data_transfar_failed );
-  checkCuFFTErrors( cufftXtSetCallback( plan, (void **)&input_cb_ptr_h, CUFFT_CB_LD_REAL, (void **)&detail ), fft_initialization_failed );
-  checkCuFFTErrors( cufftXtSetCallback( plan, (void **)&output_cb_ptr_h, CUFFT_CB_ST_COMPLEX, (void **)&detail ), fft_initialization_failed );
-  checkCuFFTErrors( cufftExecR2C( plan, (cufftReal*)input, (cufftComplex *)output ), fft_execution_failed );
-  checkCudaErrors( cudaDeviceSynchronize(), fft_execution_failed );
-  return std::move( wrapped_output );
-}
-
-std::pair< std::vector< float >, std::shared_ptr< uint8_t > > fftref( const window_list_t &window, const std::vector< int16_t > &data, size_t resolution, size_t interval, size_t width ) {
-  const auto window_iter = window.find( resolution );
-  if( window_iter == window.end() ) throw fft_initialization_failed( "invalid resolution" );
-  const size_t batch = data.size() > resolution ? ( data.size() - resolution )/interval + 1 : 1u;
+  const float c = data.size() - resolution;
+  const float x = ( -b + sqrtf( b*b + 4.f * a * c ) ) / ( 2.f * a );
+  const size_t batch = size_t( x ) == 0u ? 1u : size_t( x );
   float *envelope_d;
   checkCudaErrors(cudaMalloc( &envelope_d, sizeof(float)*batch), fft_allocation_failed );
   std::shared_ptr< float > wrapped_envelope( envelope_d, &cudaFree );
@@ -207,28 +169,29 @@ std::pair< std::vector< float >, std::shared_ptr< uint8_t > > fftref( const wind
   checkCudaErrors(cudaMallocManaged( &detail, sizeof(fft_detail),cudaMemAttachGlobal), fft_allocation_failed );
   std::shared_ptr< fft_detail > wrapped_detail( detail, &cudaFree );
   detail->resolution = resolution;
-  detail->interval = interval;
+  detail->a = a;
+  detail->b = b;
   detail->width = width;
   detail->window = window_iter->second.get();
   detail->envelope = envelope_d;
   detail->batch_offset = 0u;
   int16_t *input;
-  size_t input_size = std::max( interval*batch, data.size() );
+  size_t input_size = std::max( size_t(a*batch*batch+b*batch)+resolution, data.size() );
   checkCudaErrors(cudaMalloc( &input, sizeof(int16_t)*input_size), fft_allocation_failed );
   std::shared_ptr< int16_t > wrapped_input( input, &cudaFree );
   checkCudaErrors(cudaMemcpy( input, data.data(), sizeof(int16_t)*data.size(), cudaMemcpyHostToDevice ), fft_data_transfar_failed );
   if( input_size > data.size() ) {
     checkCudaErrors( cudaMemset( input + data.size(), 0, sizeof( int16_t )*( input_size - data.size() ) ), fft_initialization_failed );
   }
-  uint8_t *output;
-  checkCudaErrors(cudaMalloc( &output, sizeof(uint8_t)*width*batch), fft_allocation_failed );
-  std::shared_ptr< uint8_t > wrapped_output( output, &cudaFree );
+  float *output;
+  checkCudaErrors(cudaMalloc( &output, sizeof(float)*width*batch), fft_allocation_failed );
+  std::shared_ptr< float > wrapped_output( output, &cudaFree );
   cufftCallbackLoadR input_cb_ptr_h;
   checkCudaErrors( cudaMemcpyFromSymbol( &input_cb_ptr_h, input_cb_ptr_d, sizeof( cufftCallbackLoadR ) ), fft_data_transfar_failed );
   cufftCallbackStoreC output_cb_ptr_h;
   checkCudaErrors( cudaMemcpyFromSymbol( &output_cb_ptr_h, output_log_cb_ptr_d, sizeof( cufftCallbackStoreC ) ), fft_data_transfar_failed );
   for( size_t batch_offset = 0u; batch_offset < batch; batch_offset += 4200u ) {
-    std::cout << batch << " " << batch_offset << " " << std::min( batch - batch_offset, size_t( 4200u ) ) << std::endl;
+    std::cout << a << " " << b << " " << x << " " << batch << " " << batch_offset << " " << std::min( batch - batch_offset, size_t( 4200u ) ) << std::endl;
     detail->batch_offset = batch_offset;
     cufftHandle plan;
     checkCuFFTErrors( cufftCreate( &plan ), fft_initialization_failed );
@@ -246,10 +209,13 @@ std::pair< std::vector< float >, std::shared_ptr< uint8_t > > fftref( const wind
   return std::make_pair( std::move( envelope_h ), std::move( wrapped_output ) );
 }
 
-std::pair< float, std::vector< float > > fftcomp( const uint8_t *ref, size_t reference_batch_count, const window_list_t &window, const std::vector< int16_t > &data, size_t resolution, size_t interval, size_t width ) {
+std::pair< float, std::vector< float > > fftcomp( const float *ref, size_t reference_batch_count, const window_list_t &window, const std::vector< int16_t > &data, size_t resolution, float a, float b, size_t width ) {
   const auto window_iter = window.find( resolution );
   if( window_iter == window.end() ) throw fft_initialization_failed( "invalid resolution" );
-  const size_t batch = data.size() > resolution ? ( data.size() - resolution )/interval + 1 : 1u;
+  const float c = ( data.size() < resolution ) ? 0.f : float( data.size() - resolution );
+  const float x = ( -b + sqrtf( b*b + 4.f * a * c ) ) / ( 2.f * a );
+  const size_t batch = size_t( x ) == 0u ? 1u : size_t( x );
+  //const size_t batch = data.size() > resolution ? ( data.size() - resolution )/interval + 1 : 1u;
   float *envelope_d;
   checkCudaErrors(cudaMalloc( &envelope_d, sizeof(float)*batch), fft_allocation_failed );
   std::shared_ptr< float > wrapped_envelope( envelope_d, &cudaFree );
@@ -258,7 +224,8 @@ std::pair< float, std::vector< float > > fftcomp( const uint8_t *ref, size_t ref
   checkCudaErrors(cudaMallocManaged( &detail, sizeof(fft_detail),cudaMemAttachGlobal), fft_allocation_failed );
   std::shared_ptr< fft_detail > wrapped_detail( detail, &cudaFree );
   detail->resolution = resolution;
-  detail->interval = interval;
+  detail->a = a;
+  detail->b = b;
   detail->width = width;
   detail->window = window_iter->second.get();
   detail->envelope = envelope_d;
@@ -267,7 +234,9 @@ std::pair< float, std::vector< float > > fftcomp( const uint8_t *ref, size_t ref
   detail->diff = 0.0f;
   detail->batch_offset = 0u;
   int16_t *input;
-  size_t input_size = std::max( data.size(), batch*interval );
+  size_t input_size = std::max( size_t(a*batch*batch+b*batch)+resolution, data.size() );
+  //size_t input_size = std::max( data.size(), batch*interval );
+  //std::cout << a << " " << b << " " << c << " " << data.size() << " " << resolution << " " << x << " " << batch << " " << input_size << std::endl;
   checkCudaErrors(cudaMallocManaged( &input, sizeof(int16_t)*input_size ), fft_allocation_failed );
   std::shared_ptr< int16_t > wrapped_input( input, &cudaFree );
   checkCudaErrors(cudaMemcpy( input, data.data(), sizeof(int16_t)*data.size(), cudaMemcpyHostToDevice ), fft_data_transfar_failed );
@@ -303,6 +272,7 @@ std::pair< float, std::vector< float > > fftcomp( const uint8_t *ref, size_t ref
   checkCudaErrors( cudaDeviceSynchronize(), fft_execution_failed );
   std::vector< float > envelope_h( batch );
   checkCudaErrors( cudaMemcpy( envelope_h.data(), detail->envelope, sizeof(float)*batch, cudaMemcpyDeviceToHost ), fft_data_transfar_failed );
+  //std::cout << detail->diff << std::endl;
   return std::make_pair( detail->diff, std::move( envelope_h ) );
 
 }

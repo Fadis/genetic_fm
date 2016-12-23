@@ -25,7 +25,7 @@ dna::dna( const std::array< uint32_t, 56u > &src ) {
 }
 std::vector< float > dna::operator()( float attack, float release, bool has_release ) const {
   std::array< float, 4u > fm0 = {{
-    float( double( data[ 12 ] )/std::numeric_limits< uint32_t >::max()*0.3 ),
+    float( double( data[ 12 ] )/std::numeric_limits< uint32_t >::max()*0.4 ),
     float( double( data[ 13 ] )/std::numeric_limits< uint32_t >::max() ),
     float( double( data[ 14 ] )/std::numeric_limits< uint32_t >::max() ),
     float( double( data[ 15 ] )/std::numeric_limits< uint32_t >::max() )
@@ -33,7 +33,7 @@ std::vector< float > dna::operator()( float attack, float release, bool has_rele
   float fm0_scale = 1.f/(std::min( 1.0f, std::accumulate( fm0.begin(), fm0.end(), 0.f ) )*1.5f);
   std::array< float, 4u > fm1 = {{
     float( double( data[ 25 ] )/std::numeric_limits< uint32_t >::max() ),
-    float( double( data[ 26 ] )/std::numeric_limits< uint32_t >::max()*0.3 ),
+    float( double( data[ 26 ] )/std::numeric_limits< uint32_t >::max()*0.4 ),
     float( double( data[ 27 ] )/std::numeric_limits< uint32_t >::max() ),
     float( double( data[ 28 ] )/std::numeric_limits< uint32_t >::max() )
   }};
@@ -41,7 +41,7 @@ std::vector< float > dna::operator()( float attack, float release, bool has_rele
   std::array< float, 4u > fm2 = {{
     float( double( data[ 38 ] )/std::numeric_limits< uint32_t >::max() ),
     float( double( data[ 39 ] )/std::numeric_limits< uint32_t >::max() ),
-    float( double( data[ 40 ] )/std::numeric_limits< uint32_t >::max()*0.3 ),
+    float( double( data[ 40 ] )/std::numeric_limits< uint32_t >::max()*0.4 ),
     float( double( data[ 41 ] )/std::numeric_limits< uint32_t >::max() )
   }};
   float fm2_scale = 1.f/(std::min( 1.0f, std::accumulate( fm2.begin(), fm2.end(), 0.f ) )*1.5f);
@@ -49,7 +49,7 @@ std::vector< float > dna::operator()( float attack, float release, bool has_rele
     float( double( data[ 51 ] )/std::numeric_limits< uint32_t >::max() ),
     float( double( data[ 52 ] )/std::numeric_limits< uint32_t >::max() ),
     float( double( data[ 53 ] )/std::numeric_limits< uint32_t >::max() ),
-    float( double( data[ 54 ] )/std::numeric_limits< uint32_t >::max()*0.3 )
+    float( double( data[ 54 ] )/std::numeric_limits< uint32_t >::max()*0.4 )
   }};
   float fm3_scale = 1.f/(std::min( 1.0f, std::accumulate( fm3.begin(), fm3.end(), 0.f ) )*1.5f);
   std::array< float, 4u > mix = {{

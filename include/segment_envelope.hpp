@@ -4,7 +4,7 @@
 #include <vector>
 #include <tuple>
 
-std::tuple< int, int, int > segment_envelope( const std::vector< float > &input, unsigned int sample_rate );
+std::tuple< int, int, int > segment_envelope( const std::vector< float > &input, float a, float b );
 
 #endif
 

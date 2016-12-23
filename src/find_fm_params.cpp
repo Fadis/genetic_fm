@@ -65,7 +65,11 @@ int main( int argc, char* argv[] ) {
     ("output,o", boost::program_options::value<std::string>(),  "出力ディレクトリ")
     ("note,n", boost::program_options::value<int>()->default_value(60),  "音階")
     ("mipmap,m", boost::program_options::value<int>()->default_value(0),  "初期ミップマップレベル")
-    ("has-release,r", boost::program_options::value<bool>()->default_value(true),  "NOTE_OFFを有する楽器か");
+    ("has-release,r", boost::program_options::value<bool>()->default_value(true),  "NOTE_OFFを有する楽器か")
+    ("cycle,c", boost::program_options::value<unsigned int>()->default_value(4000),  "世代数")
+    ("stickiness,s", boost::program_options::value<unsigned int>()->default_value(7),  "何世代トップが変化しなかったら次の分解能に移るか")
+    ("interval,t", boost::program_options::value<unsigned int>()->default_value(2),  "時間方向の間隔")
+    ("weight,w", boost::program_options::value<int>()->default_value(-5),  "時間方向の重み");
   boost::program_options::variables_map params;
   boost::program_options::store( boost::program_options::parse_command_line( argc, argv, options ), params );
   boost::program_options::notify( params );
@@ -75,11 +79,12 @@ int main( int argc, char* argv[] ) {
   }
   const std::string input_filename = params["input"].as<std::string>();
   const std::string output_dir = params["output"].as<std::string>();
+  const int weight = params["weight"].as<int>();
+  const unsigned int interval = params["interval"].as<unsigned int>();
   init_fft();
   const auto window = generate_window();
   const auto audio = load_monoral( input_filename );
   const int x = 256;
-  spectrum_image eref( window, audio, 1024, 44100, 4096, 300 );
   /*const std::array< spectrum_image, 14 > references{{
     spectrum_image( window, audio, 32, 44100, 128, 2 ),
     spectrum_image( window, audio, 64, 44100, 256, 2 ),
@@ -97,50 +102,69 @@ int main( int argc, char* argv[] ) {
     spectrum_image( window, audio, 4096, 44100, 8192, 900 ),
   }};*/
   const std::array< spectrum_image, 15 > references{{
-    spectrum_image( window, audio, 32, 44100, 128, 2 ),
-    spectrum_image( window, audio, 64, 44100, 256, 2 ),
-    spectrum_image( window, audio, 64, 44100, 256, 5 ),
-    spectrum_image( window, audio, 128, 44100, 512, 5 ),
-    spectrum_image( window, audio, 128, 44100, 512, 10 ),
-    spectrum_image( window, audio, 256, 44100, 1024, 10 ),
-    spectrum_image( window, audio, 256, 44100, 1024, 25 ),
-    spectrum_image( window, audio, 512, 44100, 2048, 25 ),
-    spectrum_image( window, audio, 512, 44100, 2048, 50 ),
-    spectrum_image( window, audio, 1024, 44100, 4096, 50 ),
-    spectrum_image( window, audio, 1024, 44100, 4096, 100 ),
-    spectrum_image( window, audio, 2048, 44100, 8192, 100 ),
-    spectrum_image( window, audio, 2048, 44100, 8192, 300 ),
-    spectrum_image( window, audio, 4096, 44100, 8192, 300 ),
-    spectrum_image( window, audio, 4096, 44100, 8192, 900 ),
+    spectrum_image( window, audio, 32, 44100, 128, 15, weight, interval ),
+    spectrum_image( window, audio, 64, 44100, 256, 14, weight, interval ),
+    spectrum_image( window, audio, 64, 44100, 256, 13, weight, interval ),
+    spectrum_image( window, audio, 128, 44100, 512, 12, weight, interval ),
+    spectrum_image( window, audio, 128, 44100, 512, 11, weight, interval ),
+    spectrum_image( window, audio, 256, 44100, 1024, 10, weight, interval ),
+    spectrum_image( window, audio, 256, 44100, 1024, 9, weight, interval ),
+    spectrum_image( window, audio, 512, 44100, 2048, 8, weight, interval ),
+    spectrum_image( window, audio, 512, 44100, 2048,  7, weight, interval ),
+    spectrum_image( window, audio, 1024, 44100, 4096, 6, weight, interval ),
+    spectrum_image( window, audio, 1024, 44100, 4096, 5, weight, interval ),
+    spectrum_image( window, audio, 2048, 44100, 8192, 4, weight, interval ),
+    spectrum_image( window, audio, 2048, 44100, 8192, 3, weight, interval ),
+    spectrum_image( window, audio, 4096, 44100, 8192, 2, weight, interval ),
+    spectrum_image( window, audio, 4096, 44100, 8192, 1, weight, interval ),
+  }};
+  const auto &eref = references[ 14 ];
+  const std::array< int, 15 > survive_count{{
+    17,
+    16,
+    16,
+    15,
+    15,
+    14,
+    14,
+    13,
+    13,
+    12,
+    12,
+    11,
+    11,
+    10,
+    10
   }};
   std::cout << "ready" << std::endl;
   std::random_device seed_generator;
   std::mt19937 random_generator( seed_generator() );
-  std::vector< dna > dnas( 3000 );
+  std::vector< dna > dnas( survive_count[ 0 ] * survive_count[ 0 ] );
   double sum = 0.0;
   size_t mipmap_level = params["mipmap"].as<int>();
-  const float attack_time = ( eref.get_attack() - eref.get_delay() )/ float( eref.get_resolution() );
-  const float release_time = ( eref.get_height() - eref.get_release() )/ float( eref.get_resolution() );
-  const float delta_samples = eref.get_delta_samples();
-  std::array< float, 5 > history{{ 16, 8, 4, 2, 1 }};
-  size_t history_head = 0u;
+  const float attack_time = ( eref.get_attack_time() - eref.get_delay_time() );
+  const float release_time = ( eref.get_total_time() - eref.get_release_time() );
+  std::cout << __FILE__ << " " << __LINE__ << " " << attack_time << " " << release_time << std::endl;
+  size_t stable = 0u;
   std::vector< double > cached_scores;
   std::vector< dna > survived;
   const bool has_release = params["has-release"].as<bool>();
   std::vector< double > scores;
-  for( size_t cycle = 0u; cycle != 4001; ++cycle ) {
+  const unsigned int cycles = params["cycle"].as<unsigned int>() + 1u;
+  const unsigned int stickiness = params["stickiness"].as<unsigned int>();
+  for( size_t cycle = 0u; cycle != cycles; ++cycle ) {
     scores.clear();
     scores.reserve( dnas.size() );
     size_t counter = 0u;
-    const auto begin = std::chrono::high_resolution_clock::now();
+    //const auto begin = std::chrono::high_resolution_clock::now();
     for( size_t i = 0u; i != dnas.size(); ++i ) {
-      if( !cached_scores.empty() && ( i % 11 ) == 0u ) scores.push_back( cached_scores[ i / 11u ] );
+      if( !cached_scores.empty() && ( i % ( cached_scores.size() + 1 ) ) == 0u ) scores.push_back( cached_scores[ i / ( cached_scores.size() + 1 ) ] );
       else {
         const auto audio = generate_tone(
           params["note"].as<int>(),
-          eref.get_delay() * delta_samples,
-          eref.get_release() * delta_samples,
-          eref.get_height() * delta_samples,
+          eref.get_delay_time()*tinyfm3::frequency,
+          eref.get_release_time()*tinyfm3::frequency,
+          eref.get_total_time()*tinyfm3::frequency,
           dnas[ i ]( attack_time, release_time, has_release ),
           has_release
         );
@@ -149,25 +173,30 @@ int main( int argc, char* argv[] ) {
           window,
           audio
         );
-        scores.push_back( 1.0/distance );
+        scores.push_back( 1.0/(distance*distance) );
       }
     }
     survived.clear();
-    survived.reserve( 10 );
-    float dist = 0.f;
+    survived.reserve( survive_count[ mipmap_level ] );
     double top_score = 0.0;
     size_t top_index = 0;
+    double previous_top_score = 1.0/scores[ 0.f ];
     cached_scores.clear();
-    cached_scores.reserve( 10u );
+    cached_scores.reserve( survive_count[ mipmap_level ] );
     {
-      const auto top = std::distance( scores.begin(), std::max_element( scores.begin(), scores.end() ) );
-      survived.emplace_back( std::move( dnas[ top ] ) );
-      top_score = 1.0/scores[ top ];
-      cached_scores.emplace_back( scores[ top ] );
-      top_index = top;
-      dnas.erase( std::next( dnas.begin(), top ) );
-      scores.erase( std::next( scores.begin(), top ) );
-      for( size_t i = 0u; i != 9u; ++i ) {
+      const size_t elite_count = std::min( survive_count[ mipmap_level ], int( mipmap_level / 2u + 1u ) );
+      for( size_t i = 0u; i != elite_count; ++i ) {
+        const auto top = std::distance( scores.begin(), std::max_element( scores.begin(), scores.end() ) );
+        if( i == 0u ) {
+	  top_score = 1.0/scores[ top ];
+          top_index = top;
+	}
+        survived.emplace_back( std::move( dnas[ top ] ) );
+        cached_scores.emplace_back( scores[ top ] );
+        dnas.erase( std::next( dnas.begin(), top ) );
+        scores.erase( std::next( scores.begin(), top ) );
+      }
+      for( size_t i = 0u; i != survive_count[ mipmap_level ] - elite_count; ++i ) {
         std::discrete_distribution< size_t > distribution( scores.begin(), scores.end() );
         size_t pos = distribution( random_generator );
 	survived.emplace_back( std::move( dnas[ pos ] ) );
@@ -175,12 +204,12 @@ int main( int argc, char* argv[] ) {
         dnas.erase( std::next( dnas.begin(), pos ) );
         scores.erase( std::next( scores.begin(), pos ) );
       }
-      history[ ++history_head % history.size() ] = top_score;
-      const auto min_max = std::minmax_element( history.begin(), history.end() );
-      dist = *min_max.second - *min_max.first;
-      if( dist < 0.00048828125f && mipmap_level != references.size() - 1u ) {
+      if( fabs( top_score - previous_top_score ) < 0.00000001 ) ++stable;
+      else stable = 0u;
+      if( stable > stickiness && mipmap_level < references.size() - 1u ) {
         cached_scores.clear();
         mipmap_level = mipmap_level + 1u;
+	stable = 0u;
       }
     }
     dnas.clear();
@@ -191,8 +220,8 @@ int main( int argc, char* argv[] ) {
         else dnas.emplace_back( survived[ l ] );
       }
     }
-    const auto end = std::chrono::high_resolution_clock::now();
-    std::cout << cycle << " " << dist << " " << top_index << " " << top_score << " " << mipmap_level << " " << std::chrono::duration_cast< std::chrono::microseconds >( end - begin ).count() << std::endl;
+    //const auto end = std::chrono::high_resolution_clock::now();
+    std::cout << cycle << " " << top_index << " " << top_score << " " << mipmap_level << /*" " << std::chrono::duration_cast< std::chrono::microseconds >( end - begin ).count() <<*/ std::endl;
     if ( !( cycle % 10 ) ) {
       namespace karma = boost::spirit::karma;
       std::string filename;

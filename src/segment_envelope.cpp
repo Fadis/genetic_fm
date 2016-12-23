@@ -9,7 +9,7 @@
 
 #include "segment_envelope.hpp"
 
-std::tuple< int, int, int > segment_envelope( const std::vector< float > &input, unsigned int sample_rate ) {
+std::tuple< int, int, int > segment_envelope( const std::vector< float > &input, float a, float b ) {
   if( input.size() <= 1u ) {
 //    std::cout << "oops0 " << input.size() << std::endl;
     return std::make_tuple( 0, 0, 0 );
@@ -17,7 +17,7 @@ std::tuple< int, int, int > segment_envelope( const std::vector< float > &input,
   std::vector< float > grad;
   grad.emplace_back( 0.f );
   for( size_t i = 1u; i != input.size(); ++i )
-    grad.emplace_back( ( input[ i ] - input[ i - 1u ] )*sample_rate );
+    grad.emplace_back( ( input[ i ] - input[ i - 1u ] )/( 2.f * a * i + b ) );
   std::vector< float > release( input.size(), 0 );
   const auto blank_iter = std::find_if( input.rbegin(), input.rend(), []( float v ) { return v != 0; } );
   if( blank_iter == input.rend() ) {
@@ -28,9 +28,10 @@ std::tuple< int, int, int > segment_envelope( const std::vector< float > &input,
   const auto blank = std::distance( input.rbegin(), blank_iter ) + 1;
   float min_grad = std::abs( grad[ input.size() - ( 1 + blank ) ] );
   float max_release = 0.f;
-  for( size_t i = 1u; i != input.size() - blank; ++i ) {
+  size_t end_pos = input.size() - blank;
+  for( size_t i = 1u; i != end_pos; ++i ) {
     min_grad = std::min( min_grad, std::max( 0.f, -grad[ input.size() - ( i + blank ) ] ) );
-    release[ input.size() - ( i + blank ) ] = min_grad * ( float( i ) / sample_rate );
+    release[ input.size() - ( i + blank ) ] = min_grad * ( 2.f * a * ( end_pos - i ) + b );
     max_release = std::max( release[ input.size() - ( i + blank ) ], max_release );
   }
   const auto release_pos = ( max_release != 0.f ) ? std::distance( release.begin(), std::max_element( release.begin(), release.end() ) ) : int( input.size() - 1 );
@@ -45,7 +46,7 @@ std::tuple< int, int, int > segment_envelope( const std::vector< float > &input,
   min_grad = 1.f/tangent;
   for( size_t i = 0u; i != release_pos - delay_pos; ++i ) {
     min_grad = std::min( min_grad, std::max( 0.f, grad[ i + delay_pos ] ) );
-    attack[ i + delay_pos ] = min_grad * ( float( i ) / sample_rate );
+    attack[ i + delay_pos ] = min_grad * ( 2.f * a * i + b );
   }
   const auto attack_pos = std::distance( attack.begin(), std::max_element( attack.begin(), attack.end() ) );
 //  std::cout << "d : " << delay_pos << " a : " << attack_pos << " r : " << release_pos << std::endl;

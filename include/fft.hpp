@@ -36,8 +36,8 @@ struct fft_data_transfar_failed : public fft_failed {
 void init_fft();
 window_list_t generate_window();
 //std::shared_ptr< float > fft( const window_list_t &window, const std::vector< int16_t > &data, size_t resolution, size_t interval, size_t width );
-std::pair< std::vector< float >, std::shared_ptr< uint8_t > > fftref( const window_list_t &window, const std::vector< int16_t > &data, size_t resolution, size_t interval, size_t width );
-std::pair< float, std::vector< float > > fftcomp( const uint8_t*, size_t, const window_list_t &window, const std::vector< int16_t > &data, size_t resolution, size_t interval, size_t width );
+std::pair< std::vector< float >, std::shared_ptr< float > > fftref( const window_list_t &window, const std::vector< int16_t > &data, size_t resolution, float a, float b, size_t width );
+std::pair< float, std::vector< float > > fftcomp( const float*, size_t, const window_list_t &window, const std::vector< int16_t > &data, size_t resolution, float a, float b, size_t width );
 
 
 #endif
